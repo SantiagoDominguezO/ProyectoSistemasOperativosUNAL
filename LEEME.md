@@ -2,8 +2,8 @@
 
 **Sistemas Operativos · Universidad Nacional de Colombia**
 
-- **Grupo:** `<NOMBRE DEL GRUPO>`
-- **Integrantes:** `Hare Zeyiukuin Atehortua Rincon, `
+- **Grupo:** `ns`
+- **Integrantes:** `Silvana Ramirez Ardila, Rafael Ricardo Uribe Perdomo, Jose Santiago Dominguez Ortiz, Hare Zeyiukuin Atehortua Rincon`
 
 ---
 
@@ -145,6 +145,7 @@ Segmento `/dev/shm/so_practica1_shm`, creado con `shm_open` + `ftruncate` + `mma
 
 ---
 
+
 ## 6. Manejo de errores
 
 | Situación | Comportamiento |
@@ -156,47 +157,130 @@ Segmento `/dev/shm/so_practica1_shm`, creado con `shm_open` + `ftruncate` + `mma
 | Escrituras parciales, `EINTR` | Manejados en los helpers de `fifo_comun.h` |
 | Limpieza | Manejadores de SIGINT/SIGTERM hacen `unlink`/`shm_unlink`. Con `kill -9` los recursos quedan: usar `make limpiar-ipc` |
 
+**Limitaciones conocidas:** `<COMPLETAR>` (ej. un solo cliente a la vez).
 
 ---
 
 ## 7. Observaciones con herramientas de Linux
 
-> Reemplazar con salidas reales de tu máquina (mínimo dos).
+> Salidas obtenidas ejecutando los programas con un `datos.csv` de 2.000.000 de filas (54 MB) en Ubuntu 24.04. Los PID y las horas cambian en cada ejecución.
 
-### Observación 1 — `strace` del servidor FIFO bloqueado
+### Observación 1: `strace` del servidor FIFO
 
-- **Comando:** `strace -p <pid_servidor>`
-- **Salida:**
-  ```
-  <PEGAR>
-  ```
-- **Análisis:** el `open()` de lectura sobre la FIFO no retorna hasta que un escritor la abre.
+```bash
+strace -f -tt -e trace=mknod,mknodat,openat,read,write,close,unlink -o strace_fifo.txt ./fifo_server datos.csv
+```
 
-### Observación 2 — estado del proceso bloqueado
+Líneas representativas de `strace_fifo.txt`:
 
-- **Comando:** `ps -o pid,ppid,stat,wchan:20,cmd -p <pid>` y `cat /proc/<pid>/status`
-- **Salida:**
-  ```
-  <PEGAR>
-  ```
-- **Análisis:** `<COMPLETAR>`
+```
+296 05:34:59.538689 openat(AT_FDCWD, "datos.csv", O_RDONLY) = 3
+296 05:34:59.538923 mknodat(AT_FDCWD, "/tmp/so_fifo_req", S_IFIFO|0666) = 0
+296 05:34:59.539034 mknodat(AT_FDCWD, "/tmp/so_fifo_resp", S_IFIFO|0666) = 0
+296 05:34:59.539192 openat(AT_FDCWD, "/tmp/so_fifo_req", O_RDONLY) = 3
+296 05:35:01.075963 openat(AT_FDCWD, "/tmp/so_fifo_resp", O_WRONLY) = 4
+296 05:35:02.077904 openat(AT_FDCWD, "datos.csv", O_RDONLY) = 5
+296 05:35:02.482258 write(4, "OK|1|25\n", 8) = 8
+296 05:35:03.079987 write(4, "OK|10|195\n", 10) = 10
+296 05:35:04.080598 write(4, "BYE|0|0\n", 8) = 8
+296 05:35:04.080927 unlink("/tmp/so_fifo_req") = 0
+296 05:35:04.081021 unlink("/tmp/so_fifo_resp") = 0
+```
 
-### Observación 3 — disco vs. memoria con un CSV grande
+**Análisis:**
 
-- **Comando:** `ls -lh datos.csv` y `grep VmRSS /proc/<pid>/status`
-- **Salida:**
-  ```
-  <PEGAR>
-  ```
-- **Análisis:** el RSS del servidor se mantiene en KB o pocos MB aunque `datos.csv` pese cientos de MB, porque se lee secuencialmente.
+- `mkfifo()` de la biblioteca se traduce en la llamada al sistema `mknodat` con `S_IFIFO`.
+- El `openat(..., O_RDONLY)` sobre `so_fifo_req` empezó en `:59.539` y el siguiente `openat` en `:01.075`. Esa diferencia de ~1,5 s es el tiempo que el servidor estuvo **bloqueado** hasta que el cliente abrió el otro extremo.
+- Cada consulta abre `datos.csv` de nuevo (`fd 5`) y responde con un único `write` de cabecera `TIPO|n|len` en el `fd 4`.
+- Al terminar, `unlink` elimina las dos FIFO.
 
-### Observación 4 — descriptores y recursos IPC
+### Observación 2: estado de los procesos bloqueados
 
-- **Comando:** `lsof -p <pid>` y `ls -l /tmp/so_fifo_* /dev/shm`
-- **Salida:**
-  ```
-  <PEGAR>
-  ```
+```bash
+ps -o pid,ppid,stat,wchan:20,cmd -p <pid>
+grep -E 'State|VmRSS|VmSize' /proc/<pid>/status
+```
+
+Servidor FIFO sin cliente conectado:
+
+```
+  PID  PPID STAT WCHAN                CMD
+  296   292 S    wait_for_partner     ./fifo_server datos.csv
+State:  S (sleeping)
+VmSize: 2688 kB
+VmRSS:  1596 kB
+```
+
+Servidor y cliente FIFO con la conexión establecida y esperando:
+
+```
+  PID  PPID STAT WCHAN                CMD
+  296   292 S    anon_pipe_read       ./fifo_server datos.csv
+  307   290 S    anon_pipe_read       ./fifo_client
+```
+
+Servidor SHM esperando solicitudes:
+
+```
+  PID  PPID STAT WCHAN                CMD
+  365   361 S    futex_do_wait        ./shm_server datos.csv
+```
+
+**Análisis:**
+
+- Los tres procesos están en estado `S` (dormidos), así que no consumen CPU mientras esperan.
+- En FIFO, `wait_for_partner` es el `open()` esperando al otro extremo y `anon_pipe_read` es un `read()` sobre una tubería vacía.
+- En memoria compartida, `futex_do_wait` es `sem_wait` dormido en un futex del kernel.
+- El PPID de servidor y cliente es distinto: son procesos **no emparentados**, cada uno hijo de su propia shell.
+
+### Observación 3: datos en disco vs. datos en memoria
+
+```bash
+ls -lh datos.csv
+grep -E 'VmSize|VmRSS|VmHWM' /proc/<pid_servidor>/status
+grep -c 'read(5' strace_fifo.txt
+```
+
+```
+-rw-r--r-- 1 root root 54M datos.csv
+VmSize: 2688 kB
+VmHWM:  1784 kB
+VmRSS:  1784 kB
+13641 read(5, "...", 4096) = 4096
+```
+
+**Análisis:** el servidor ya había recorrido el archivo completo (búsqueda del id 1999999), pero su memoria residente máxima fue de solo ~1,7 MB frente a 54 MB de CSV. Se hicieron 13.641 `read()` de 4096 bytes (≈53 MiB), es decir, el archivo se procesa por bloques y nunca se carga completo.
+
+### Observación 4: descriptores abiertos y recursos IPC
+
+```bash
+lsof -p <pid_servidor>,<pid_cliente> | grep -i fifo
+ls -l /tmp/so_fifo_* /dev/shm/so_practica1_shm
+```
+
+```
+fifo_serv 296 root  3r  FIFO  254,0  0t0  359 /tmp/so_fifo_req
+fifo_serv 296 root  4w  FIFO  254,0  0t0  358 /tmp/so_fifo_resp
+fifo_clie 307 root  3w  FIFO  254,0  0t0  359 /tmp/so_fifo_req
+fifo_clie 307 root  4r  FIFO  254,0  0t0  358 /tmp/so_fifo_resp
+
+-rw-r--r-- 1 root root 8400 /dev/shm/so_practica1_shm
+```
+
+**Análisis:**
+
+- Cada FIFO tiene el mismo número de inodo en servidor y cliente (359 y 358), y los extremos son opuestos: lo que uno abre para escribir, el otro lo abre para leer.
+- En SHM el segmento ocupa 8400 bytes, que es `sizeof(Compartida)`, y es un archivo visible en `/dev/shm`.
+- `ipcs -m -s` sale **vacío** porque solo lista IPC System V; la memoria compartida y los semáforos POSIX no aparecen ahí.
+
+### Observación 5: terminación inesperada (`kill -9`)
+
+| Caso | Recursos que quedan | Efecto en el cliente |
+|------|---------------------|----------------------|
+| `kill -9` al servidor FIFO | `/tmp/so_fifo_req` y `/tmp/so_fifo_resp` siguen existiendo | Al iniciar: `open(O_NONBLOCK)` da `ENXIO` y imprime "El servidor no esta en ejecucion." |
+| `kill -9` al servidor SHM | `/dev/shm/so_practica1_shm` sigue existiendo | `shm_open` funciona, el cliente espera y a los 10 s imprime "El servidor no respondio en 10 segundos." |
+
+Se limpian con `make limpiar-ipc`. Un servidor nuevo los reutiliza o recrea (`EEXIST` se ignora en FIFO y `shm_unlink` previo en SHM).
 
 ---
 
