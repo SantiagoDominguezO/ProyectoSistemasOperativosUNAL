@@ -62,6 +62,4 @@ sequenceDiagram
     C->>M: tipo SALIR y sem_post(sem_solicitud)
     S->>M: sem_post(sem_respuesta)
     S->>M: sem_destroy, munmap y shm_unlink
-
-
----
+```
