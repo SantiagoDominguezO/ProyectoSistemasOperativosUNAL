@@ -8,10 +8,9 @@ Integrantes: <NOMBRES>
 ======================================================================
 Archivo: datos.csv (sintetico, generado con ./generar_csv.sh)
 Columnas: id,nombre,ciudad,edad
-  - id      : entero unico (1..N)
-  - nombre  : nombre + numero (ej. Ana123)
-  - ciudad  : una de 10 ciudades colombianas (Bogota, Medellin, Cali, ...)
-  - edad    : entero entre 18 y 77
+  - id      : 1011090191, 
+  - nombre  : Hare Zeyiukuin Atehortua Rincon.
+  - ciudad  : Bogota D.C
 Tamano por defecto: 2.000.000 filas (~<COMPLETAR> MB; ver `ls -lh datos.csv`).
 El archivo completo permanece en disco: busqueda.c lo lee linea por linea
 con fgets() y nunca lo carga en memoria.
@@ -144,9 +143,3 @@ Observacion 4 - descriptores y recursos IPC:
   Comando : lsof -p <pid> ; ls -l /tmp/so_fifo_* /dev/shm
   Salida  : <PEGAR>
 
-======================================================================
-8. USO DE HERRAMIENTAS DE IA
-======================================================================
-<Declarar brevemente: que herramienta se uso, para que (conceptos, depuracion,
-revision del codigo) y confirmar que todos los integrantes comprenden y pueden
-modificar el codigo entregado.>
