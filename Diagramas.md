@@ -1,0 +1,65 @@
+## Diagramas de funcionamiento
+
+### Arquitectura general
+
+```mermaid
+flowchart LR
+    U([Usuario]) -->|teclado| C[Proceso cliente CLI]
+    C <-->|IPC: FIFO o memoria compartida| S[Proceso servidor]
+    S -->|fgets linea por linea| D[(datos.csv en disco)]
+```
+
+### Versión FIFO
+
+```mermaid
+sequenceDiagram
+    participant C as fifo_client
+    participant Q as FIFO req
+    participant R as FIFO resp
+    participant S as fifo_server
+    participant D as datos.csv
+
+    S->>Q: mkfifo y open O_RDONLY (se bloquea hasta que llegue un escritor)
+    S->>R: mkfifo
+    C->>Q: open O_WRONLY y O_NONBLOCK (ENXIO si no hay servidor)
+    Note over S,Q: open de req retorna
+    S->>R: open O_WRONLY (espera al lector)
+    C->>R: open O_RDONLY
+    loop cada consulta
+        C->>Q: CONSULTA|criterio|valor
+        Q-->>S: read de la linea
+        S->>D: buscar() lee bloques de 4096 bytes
+        S->>R: write TIPO|n|len y cuerpo
+        R-->>C: leer_linea y leer_exacto
+    end
+    C->>Q: SALIR
+    S->>R: BYE|0|0
+    S->>S: close y unlink de las dos FIFO
+```
+
+### Versión memoria compartida
+
+```mermaid
+sequenceDiagram
+    participant C as shm_client
+    participant M as Segmento /dev/shm con 2 semaforos
+    participant S as shm_server
+    participant D as datos.csv
+
+    S->>M: shm_open, ftruncate, mmap, sem_init x2 (valor 0)
+    S->>M: sem_wait(sem_solicitud) duerme en un futex
+    C->>M: shm_open y mmap (ENOENT si no hay servidor)
+    loop cada consulta
+        C->>M: escribe tipo, criterio y valor
+        C->>M: sem_post(sem_solicitud)
+        M-->>S: el servidor despierta
+        S->>D: buscar() lee linea por linea
+        S->>M: escribe n, estado y cuerpo
+        S->>M: sem_post(sem_respuesta)
+        C->>M: sem_timedwait(sem_respuesta) maximo 10 s
+        M-->>C: despierta y lee el resultado
+    end
+    C->>M: tipo SALIR y sem_post(sem_solicitud)
+    S->>M: sem_post(sem_respuesta)
+    S->>M: sem_destroy, munmap y shm_unlink
+```
