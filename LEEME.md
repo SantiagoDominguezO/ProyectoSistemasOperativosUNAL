@@ -11,7 +11,7 @@ Columnas: id,nombre,ciudad,edad
   - id      : 1011090191, 
   - nombre  : Hare Zeyiukuin Atehortua Rincon.
   - ciudad  : Bogota D.C
-Tamano por defecto: 2.000.000 filas (~<COMPLETAR> MB; ver `ls -lh datos.csv`).
+Tamaño por defecto: 2.000.000 filas (~<COMPLETAR> MB; ver `ls -lh datos.csv`).
 El archivo completo permanece en disco: busqueda.c lo lee linea por linea
 con fgets() y nunca lo carga en memoria.
 
