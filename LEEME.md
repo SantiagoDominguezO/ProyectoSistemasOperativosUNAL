@@ -2,8 +2,10 @@
 
 **Sistemas Operativos · Universidad Nacional de Colombia**
 
-- **Grupo:** `ns`
-- **Integrantes:** `Silvana Ramirez Ardila, Rafael Ricardo Uribe Perdomo, Jose Santiago Dominguez Ortiz, Hare Zeyiukuin Atehortua Rincon`
+- **Grupo:** ns
+- **Integrantes:** Silvana Ramirez Ardila, Rafael Ricardo Uribe Perdomo, Jose Santiago Dominguez Ortiz, Hare Zeyiukuin Atehortua Rincon
+
+> Los diagramas de arquitectura y de secuencia (FIFO y memoria compartida) se encuentran separados en el archivo [`Diagramas.md`](Diagramas.md).
 
 ---
 
@@ -18,7 +20,7 @@ Archivo `datos.csv`, sintético, generado con `./generar_csv.sh`.
 | `ciudad` | Una de 10 ciudades colombianas (Bogota, Medellin, Cali, ...) |
 | `edad` | Entero entre 18 y 77 |
 
-- **Tamaño por defecto:** 2.000.000 filas (~`<COMPLETAR>` MB; ver `ls -lh datos.csv`).
+- **Tamaño por defecto:** 2.000.000 filas (54 MB; ver `ls -lh datos.csv`).
 - El archivo completo permanece en disco: `busqueda.c` lo lee línea por línea con `fgets()` y nunca lo carga en memoria.
 
 **Criterios de búsqueda**
@@ -124,7 +126,9 @@ Segmento `/dev/shm/so_practica1_shm`, creado con `shm_open` + `ftruncate` + `mma
 
 **Flujo:** el cliente escribe la solicitud → `post(sem_solicitud)` → el servidor busca y escribe la respuesta → `post(sem_respuesta)` → el cliente lee. El cliente nunca lee antes de que el servidor termine porque está dormido en `sem_respuesta`.
 
-> `<COMPLETAR>`: si se agrega `sem_mutex` para varios clientes o el drenado de `sem_respuesta`, describirlo aquí. Si no, documentar que se soporta un solo cliente a la vez.
+**Limitación:** La arquitectura actual soporta un único cliente activo a la vez; no se utiliza `sem_mutex` adicional para concurrencia masiva simultánea.
+
+Los dos semáforos garantizan el orden cliente → servidor → cliente para ese único cliente (nunca lee antes de que el servidor termine de escribir). Si dos clientes escribieran a la vez en `Compartida`, se pisarían `criterio`, `valor` y `cuerpo` (condición de carrera); para evitarlo habría que agregar un `sem_mutex` (valor inicial 1) que cada cliente tome antes de escribir la solicitud y suelte tras leer la respuesta.
 
 ---
 
@@ -136,10 +140,10 @@ Segmento `/dev/shm/so_practica1_shm`, creado con `shm_open` + `ftruncate` + `mma
 | SHM | `/dev/shm/so_practica1_shm` | `shm_open` / `shm_unlink` |
 | SHM | 2 semáforos POSIX dentro del segmento | `sem_init` / `sem_destroy` |
 
-**Descriptores abiertos por proceso** (completar con `lsof -p <pid>`):
+**Descriptores abiertos por proceso** (obtenidos con `lsof -p <pid>`):
 
-- `fifo_server`: `<COMPLETAR>`
-- `fifo_client`: `<COMPLETAR>`
+- `fifo_server`: `3r` = `so_fifo_req`, `4w` = `so_fifo_resp`, además de los estándar `0` (stdin), `1` (stdout) y `2` (stderr).
+- `fifo_client`: `3w` = `so_fifo_req`, `4r` = `so_fifo_resp`, además de los estándar `0` (stdin), `1` (stdout) y `2` (stderr).
 
 > `ipcs` solo muestra IPC System V. La memoria compartida y los semáforos POSIX se ven con `ls -l /dev/shm` y `lsof`.
 
@@ -157,13 +161,19 @@ Segmento `/dev/shm/so_practica1_shm`, creado con `shm_open` + `ftruncate` + `mma
 | Escrituras parciales, `EINTR` | Manejados en los helpers de `fifo_comun.h` |
 | Limpieza | Manejadores de SIGINT/SIGTERM hacen `unlink`/`shm_unlink`. Con `kill -9` los recursos quedan: usar `make limpiar-ipc` |
 
-**Limitaciones conocidas:** `<COMPLETAR>` (ej. un solo cliente a la vez).
+**Limitaciones conocidas**
+
+- **Un único cliente concurrente a la vez, en SHM y en FIFO.** No hay exclusión entre clientes: en SHM dos clientes se pisarían la estructura compartida (ver sección 4), y en FIFO un segundo cliente podría abrir las tuberías mientras el servidor atiende al primero y las respuestas se mezclarían.
+- **Dependencia de limpieza ante cierres abruptos (`kill -9`).** Con `SIGKILL` el servidor no ejecuta sus manejadores, así que `/tmp/so_fifo_req`, `/tmp/so_fifo_resp` y `/dev/shm/so_practica1_shm` quedan en el sistema y hay que borrarlos con `make limpiar-ipc`. Además, en SHM un cliente nuevo no detecta que el servidor murió y espera los 10 s del timeout.
+- SHM: si el cliente agota los 10 s, el servidor puede publicar `sem_respuesta` más tarde y el siguiente cliente recibiría una respuesta atrasada.
+- Cada consulta reabre y recorre el CSV desde el inicio (búsqueda secuencial), con máximo 10 resultados y un cuerpo de respuesta de hasta 8192 bytes.
+- En FIFO el valor buscado no puede contener `|`, porque se usa como separador del protocolo.
 
 ---
 
 ## 7. Observaciones con herramientas de Linux
 
-> Salidas obtenidas ejecutando los programas con un `datos.csv` de 2.000.000 de filas (54 MB) en Ubuntu 24.04. Los PID y las horas cambian en cada ejecución.
+> Salidas obtenidas ejecutando los programas con un `datos.csv` de 2.000.000 de filas (~54 MB) en `<COMPLETAR: distribución y versión de Linux>`. Los PID y las horas cambian en cada ejecución.
 
 ### Observación 1: `strace` del servidor FIFO
 

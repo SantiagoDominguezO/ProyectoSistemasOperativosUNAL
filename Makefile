@@ -23,7 +23,7 @@ shm_client: shm_client.c shm_comun.h busqueda.h
 # Genera datos.csv (2 millones de filas por defecto): make datos N=5000000
 N ?= 2000000
 datos:
-	./generar_csv.sh $(N)
+	bash generar_csv.sh $(N)
 
 # Borra recursos IPC que hayan quedado de una ejecucion incorrecta
 limpiar-ipc:
