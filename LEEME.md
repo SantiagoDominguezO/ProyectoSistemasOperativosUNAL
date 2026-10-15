@@ -105,6 +105,8 @@ ERR|0|<len>\nMensaje...        error (CSV ilegible, consulta mal formada)
 BYE|0|0\n                      confirmación de SALIR
 ```
 
+`responder()` en `fifo_server.c` envía cada respuesta con **dos llamadas `write`**: una para la cabecera `TIPO|n|len\n` y, solo si `len > 0`, otra para el cuerpo. Al ser un flujo de bytes, el cliente no depende de cuántos `write` hizo el servidor: lee la cabecera con `leer_linea()` y luego exactamente `len` bytes con `leer_exacto()`.
+
 **Cómo se evitan escrituras o lecturas parciales**
 
 - `escribir_todo()` repite `write()` hasta enviar todos los bytes.
@@ -112,6 +114,8 @@ BYE|0|0\n                      confirmación de SALIR
 - `leer_linea()` lee la cabecera byte a byte hasta `\n`.
 - Todas reintentan ante `EINTR`.
 - El campo `valor` no puede contener `|`; el cliente lo rechaza.
+
+**Nota sobre `O_NONBLOCK`:** `fifo_client.c` abre `/tmp/so_fifo_req` con `O_WRONLY | O_NONBLOCK` para detectar si hay servidor (`ENXIO`/`ENOENT` en vez de quedarse bloqueado). El flag **no se quita después con `fcntl`**, así que ese descriptor queda no bloqueante. Funciona porque cada petición mide menos de 256 bytes, menos que `PIPE_BUF` (4096 bytes): el `write()` es atómico y, al ser el protocolo petición-respuesta, el pipe (64 KiB) nunca se llena y no aparece `EAGAIN`. Si se llenara, `escribir_todo()` no lo maneja y el cliente terminaría con error.
 
 ---
 
@@ -125,6 +129,8 @@ Segmento `/dev/shm/so_practica1_shm`, creado con `shm_open` + `ftruncate` + `mma
 | `sem_respuesta` | Servidor, al terminar de escribir la respuesta | Cliente, en `sem_timedwait` (10 s) |
 
 **Flujo:** el cliente escribe la solicitud → `post(sem_solicitud)` → el servidor busca y escribe la respuesta → `post(sem_respuesta)` → el cliente lee. El cliente nunca lee antes de que el servidor termine porque está dormido en `sem_respuesta`.
+
+`shm_client.c` solo usa `sem_post` y `sem_timedwait`; **no drena `sem_respuesta` con `sem_trywait`** antes de enviar la solicitud.
 
 **Limitación:** La arquitectura actual soporta un único cliente activo a la vez; no se utiliza `sem_mutex` adicional para concurrencia masiva simultánea.
 
@@ -165,7 +171,8 @@ Los dos semáforos garantizan el orden cliente → servidor → cliente para ese
 
 - **Un único cliente concurrente a la vez, en SHM y en FIFO.** No hay exclusión entre clientes: en SHM dos clientes se pisarían la estructura compartida (ver sección 4), y en FIFO un segundo cliente podría abrir las tuberías mientras el servidor atiende al primero y las respuestas se mezclarían.
 - **Dependencia de limpieza ante cierres abruptos (`kill -9`).** Con `SIGKILL` el servidor no ejecuta sus manejadores, así que `/tmp/so_fifo_req`, `/tmp/so_fifo_resp` y `/dev/shm/so_practica1_shm` quedan en el sistema y hay que borrarlos con `make limpiar-ipc`. Además, en SHM un cliente nuevo no detecta que el servidor murió y espera los 10 s del timeout.
-- SHM: si el cliente agota los 10 s, el servidor puede publicar `sem_respuesta` más tarde y el siguiente cliente recibiría una respuesta atrasada.
+- SHM: como el cliente no drena `sem_respuesta` con `sem_trywait`, si agota los 10 s el servidor puede publicar `sem_respuesta` más tarde y el siguiente cliente recibiría una respuesta atrasada.
+- FIFO: `O_NONBLOCK` no se limpia con `fcntl` tras el `open()` de `/tmp/so_fifo_req` (ver nota en la sección 3).
 - Cada consulta reabre y recorre el CSV desde el inicio (búsqueda secuencial), con máximo 10 resultados y un cuerpo de respuesta de hasta 8192 bytes.
 - En FIFO el valor buscado no puede contener `|`, porque se usa como separador del protocolo.
 
@@ -173,7 +180,7 @@ Los dos semáforos garantizan el orden cliente → servidor → cliente para ese
 
 ## 7. Observaciones con herramientas de Linux
 
-> Salidas obtenidas ejecutando los programas con un `datos.csv` de 2.000.000 de filas (~54 MB) en `<COMPLETAR: distribución y versión de Linux>`. Los PID y las horas cambian en cada ejecución.
+> Salidas obtenidas ejecutando los programas con un `datos.csv` de 2.000.000 de filas (~54 MB) en Ubuntu 26.04.1 LTS sobre WSL2. Los PID y las horas cambian en cada ejecución.
 
 ### Observación 1: `strace` del servidor FIFO
 
@@ -201,7 +208,7 @@ Líneas representativas de `strace_fifo.txt`:
 
 - `mkfifo()` de la biblioteca se traduce en la llamada al sistema `mknodat` con `S_IFIFO`.
 - El `openat(..., O_RDONLY)` sobre `so_fifo_req` empezó en `:59.539` y el siguiente `openat` en `:01.075`. Esa diferencia de ~1,5 s es el tiempo que el servidor estuvo **bloqueado** hasta que el cliente abrió el otro extremo.
-- Cada consulta abre `datos.csv` de nuevo (`fd 5`) y responde con un único `write` de cabecera `TIPO|n|len` en el `fd 4`.
+- Cada consulta abre `datos.csv` de nuevo (`fd 5`) y responde con dos `write` en el `fd 4`: la cabecera `TIPO|n|len` (las líneas `write(4, "OK|1|25\n", 8)` del extracto) y, si `len > 0`, el cuerpo. Las respuestas `OK|0|0` y `BYE|0|0` no tienen cuerpo y solo generan un `write`.
 - Al terminar, `unlink` elimina las dos FIFO.
 
 ### Observación 2: estado de los procesos bloqueados
